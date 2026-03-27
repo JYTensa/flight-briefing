@@ -2,43 +2,24 @@ import streamlit as st
 import requests
 from openai import OpenAI
 import datetime
+from fpdf import FPDF
+import io
 
 # ==========================================
-# 1. PAGE SETUP & THEME
+# 1. PAGE SETUP & THEME (FIXED VERSION)
 # ==========================================
 st.set_page_config(page_title="Flight Briefing", page_icon="✈️", layout="centered")
 
-# Custom CSS for the Navy Blue Theme
+# Corrected styling block
 st.markdown("""
     <style>
-    /* Main background */
-    .stApp {
-        background-color: #001529;
-        color: #e6f7ff;
-    }
-    /* Headers */
-    h1, h2, h3 {
-        color: #ffffff !important;
-    }
-    /* Expander styling */
-    .streamlit-expanderHeader {
-        background-color: #002140 !important;
-        border-radius: 5px;
-    }
-    /* Button styling */
-    .stButton>button {
-        background-color: #1890ff;
-        color: white;
-        border-radius: 10px;
-        border: none;
-        width: 100%;
-    }
-    /* Input and Slider labels */
-    .stSlider label, .stTextInput label {
-        color: #bae7ff !important;
-    }
+    .stApp { background-color: #001529; color: #e6f7ff; }
+    h1, h2, h3 { color: #ffffff !important; }
+    .streamlit-expanderHeader { background-color: #002140 !important; border-radius: 5px; }
+    .stButton>button { background-color: #1890ff; color: white; border-radius: 10px; width: 100%; border: none; height: 3em; font-weight: bold; }
+    .stSlider label, .stTextInput label { color: #bae7ff !important; }
     </style>
-    """, unsafe_content_label=True, unsafe_content_type="html")
+    """, unsafe_allow_html=True) # <--- This line was the fix!
 
 # ==========================================
 # 2. API KEYS & SETUP
@@ -46,13 +27,10 @@ st.markdown("""
 CHECKWX_API_KEY = st.secrets["CHECKWX_KEY"]
 GEMINI_API_KEY = st.secrets["GEMINI_KEY"]
 
-client = OpenAI(
-    api_key=GEMINI_API_KEY,
-    base_url="https://generativelanguage.googleapis.com/v1beta/openai/"
-)
+client = OpenAI(api_key=GEMINI_API_KEY, base_url="https://generativelanguage.googleapis.com/v1beta/openai/")
 
 # ==========================================
-# 3. DATA FUNCTIONS
+# 3. HELPER FUNCTIONS
 # ==========================================
 def get_weather_data(icao_code, report_type="taf"):
     url = f"https://api.checkwx.com/{report_type}/{icao_code}/decoded"
@@ -68,64 +46,51 @@ def get_weather_data(icao_code, report_type="taf"):
 
 def generate_briefing(weather_context, flight_plan_summary, pilot_name):
     system_prompt = f"""
-    You are a highly experienced British aviation assistant. Write a structured pre-flight briefing for Pilot {pilot_name}.
-    
-    TONE: Start exactly with: "Morning {pilot_name},\nHope you slept well." 
-    Be professional, direct, and use British aviation phrasing.
-    
-    FLIGHT PLAN & LIMITS:
-    {flight_plan_summary}
-    
-    WEATHER DATA:
-    {weather_context}
-    
-    INSTRUCTIONS:
-    1. Overall Assessment: One clear Go/No-Go sentence.
-    2. Airport Breakdown: For EACH airport, provide exactly THREE bullet points (Winds, Cloud/Vis, Timing/Trends).
-    3. Outlook: A brief 1-2 sentence outlook for tomorrow.
+    You are an experienced British aviation assistant. Write a structured briefing for Pilot {pilot_name}.
+    TONE: Start with: "Morning {pilot_name}, Hope you slept well." 
+    FORMAT: 1. Go/No-Go sentence. 2. Three bullet points for EACH airport. 3. 2-sentence outlook.
+    DATA: {weather_context} | PLAN: {flight_plan_summary}
     """
-
     response = client.chat.completions.create(
         model="gemini-2.5-flash", 
-        messages=[
-            {"role": "system", "content": "You are a precise aviation weather assistant."},
-            {"role": "user", "content": system_prompt}
-        ],
+        messages=[{"role": "system", "content": "Aviation assistant."}, {"role": "user", "content": system_prompt}],
         temperature=0.5
     )
     return response.choices[0].message.content
 
+def create_pdf(text, pilot_name):
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_font("Arial", "B", 16)
+    pdf.cell(200, 10, txt=f"Flight Briefing for {pilot_name}", ln=True, align='C')
+    pdf.set_font("Arial", "I", 10)
+    pdf.cell(200, 10, txt=f"Generated on: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Zulu", ln=True, align='C')
+    pdf.ln(10)
+    pdf.set_font("Arial", size=11)
+    # Clean up text for PDF compatibility
+    clean_text = text.encode('latin-1', 'ignore').decode('latin-1')
+    pdf.multi_cell(0, 7, txt=clean_text)
+    return pdf.output()
+
 # ==========================================
-# 4. INTERACTIVE USER INTERFACE
+# 4. INTERACTIVE UI
 # ==========================================
 with st.expander("📝 Pilot & Flight Parameters", expanded=True):
     user_name = st.text_input("Pilot Name:", value="Tonye")
-    
     st.divider()
-    
-    route_raw = st.text_input("Route (ICAO codes separated by commas):", value="EGSS, EGSX, EGMC, EGKA")
+    route_raw = st.text_input("Route (ICAO codes):", value="EGSS, EGSX, EGMC, EGKA")
     selected_airports = [icao.strip().upper() for icao in route_raw.split(",") if icao.strip()]
-
     col1, col2 = st.columns(2)
     with col1:
         dep_time = st.time_input("Departure Time (Z)", datetime.time(9, 15))
-    with col2:
-        ret_time = st.time_input("Return Time (Z)", datetime.time(13, 0))
-
-    st.write("**Personal Minimums**")
-    c1, c2 = st.columns(2)
-    with c1:
         max_wind = st.slider("Max Wind (kts)", 5, 30, 15)
         min_cloud = st.slider("Min Cloud (ft)", 500, 5000, 1500, step=100)
-    with c2:
+    with col2:
+        ret_time = st.time_input("Return Time (Z)", datetime.time(13, 0))
         max_gust = st.slider("Max Gust (kts)", 5, 45, 20)
         min_vis = st.slider("Min Vis (m)", 1000, 10000, 8000, step=500)
 
-    flight_summary = f"""
-    Route: {', '.join(selected_airports)}
-    Times: {dep_time.strftime('%H%MZ')} to {ret_time.strftime('%H%MZ')}
-    Limits: {max_wind}kt wind / {max_gust}kt gust. {min_cloud}ft cloud base. {min_vis}m visibility.
-    """
+    flight_summary = f"Route: {', '.join(selected_airports)} | Times: {dep_time} to {ret_time}"
 
 st.title(f"✈️ Morning, {user_name}")
 
@@ -139,15 +104,22 @@ if st.button("Generate Briefing", type="primary"):
         with st.spinner(f"Analyzing weather for Pilot {user_name}..."):
             weather_report = ""
             for icao in selected_airports:
-                m = get_weather_data(icao, "metar")
-                t = get_weather_data(icao, "taf")
-                weather_report += f"--- {icao} ---\nMETAR: {m}\nTAF: {t}\n\n"
+                weather_report += f"--- {icao} ---\nMETAR: {get_weather_data(icao, 'metar')}\nTAF: {get_weather_data(icao, 'taf')}\n\n"
             
             output = generate_briefing(weather_report, flight_summary, user_name)
             
             st.markdown("---")
             st.markdown(f"### 📋 Pre-Flight Analysis for {user_name}")
             st.markdown(output)
+            
+            # PDF BUTTON
+            pdf_data = create_pdf(output, user_name)
+            st.download_button(
+                label="📥 Download Briefing as PDF",
+                data=bytes(pdf_data),
+                file_name=f"Briefing_{user_name}.pdf",
+                mime="application/pdf"
+            )
             
             with st.expander("🔍 View Raw Weather Data"):
                 st.code(weather_report)

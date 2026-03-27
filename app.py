@@ -1,28 +1,23 @@
 import streamlit as st
 import requests
 from openai import OpenAI
+import datetime
 
 # ==========================================
 # 1. PAGE SETUP
 # ==========================================
-# This must be the very first Streamlit command
-st.set_page_config(page_title="Tonye's Flight Briefing", page_icon="✈️")
-
+st.set_page_config(page_title="Tonye's Flight Briefing", page_icon="✈️", layout="centered")
 
 # ==========================================
-# 2. API KEYS & SETUP
+# 2. API KEYS & SETUP (Using Secrets)
 # ==========================================
-# We use st.secrets so your keys stay hidden on the server
-# We ask Streamlit for the "labels", not the actual keys
 CHECKWX_API_KEY = st.secrets["CHECKWX_KEY"]
 GEMINI_API_KEY = st.secrets["GEMINI_KEY"]
 
-# Initialize the AI client
 client = OpenAI(
     api_key=GEMINI_API_KEY,
     base_url="https://generativelanguage.googleapis.com/v1beta/openai/"
 )
-
 
 # ==========================================
 # 3. DATA FUNCTIONS
@@ -37,39 +32,40 @@ def get_weather_data(icao_code, report_type="taf"):
             return data['data'][0].get('raw_text', 'No raw text available')
         return f"No {report_type.upper()} data published."
     except Exception as e:
-        return f"Error fetching {report_type.upper()} for {icao_code}: {e}"
+        return f"Error: {e}"
 
-def generate_briefing(weather_context, flight_plan):
+def generate_briefing(weather_context, flight_plan_summary):
     system_prompt = f"""
-    You are a highly experienced British aviation assistant. Write a detailed but highly structured pre-flight briefing for Pilot Tonye.
+    You are a highly experienced British aviation assistant. Write a detailed but structured pre-flight briefing for Pilot Tonye.
     
-    TONE: Start exactly with: "Morning Tonye,\nHope you slept well." Be polite, professional, and direct. Use phrases like "wishful for me to hope" or "not satisfactory conditions" if the weather violates his limits.
+    TONE: Start exactly with: "Morning Tonye,\nHope you slept well." Be professional and direct. 
+    If weather violates limits, use phrases like "not satisfactory conditions".
     
     FLIGHT PLAN & LIMITS:
-    {flight_plan}
+    {flight_plan_summary}
     
     WEATHER DATA:
     {weather_context}
     
     INSTRUCTIONS:
-    1. Overall Assessment: Open with a single, clear Go/No-Go sentence based strictly on his personal minimums.
-    2. Airport Breakdown: For EACH airport (Stansted, North Weald, Southend, Shoreham), you MUST provide exactly THREE bullet points. Do not write paragraphs.
-        - Bullet 1: Wind analysis (speed, gusts, direction) compared to his limits.
-        - Bullet 2: Cloud base and visibility analysis compared to his limits.
-        - Bullet 3: Timing and trends (how it develops specifically during his 0915Z-1300Z window).
-    3. Missing Data: If an airport is missing data, use your 3 bullets to briefly state what is missing and advise caution.
-    4. Outlook: Conclude with a brief 1-2 sentence outlook for tomorrow.
+    1. Overall Assessment: One clear Go/No-Go sentence based on his minimums.
+    2. Airport Breakdown: For EACH airport provided, give exactly THREE bullet points:
+        - Bullet 1: Wind analysis (speed/gusts) vs limits.
+        - Bullet 2: Cloud/Visibility vs limits.
+        - Bullet 3: Timing/Trends during his specific flight window.
+    3. Outlook: A brief 1-2 sentence outlook for tomorrow.
     """
 
     response = client.chat.completions.create(
         model="gemini-2.5-flash", 
         messages=[
-            {"role": "system", "content": "You are a precise and structured aviation weather assistant."},
+            {"role": "system", "content": "You are a precise aviation weather assistant."},
             {"role": "user", "content": system_prompt}
         ],
-        temperature=0.6 # Lowered slightly to make the AI follow the 3-bullet rule more strictly
+        temperature=0.5
     )
     return response.choices[0].message.content
+
 
 # ==========================================
 # 4. STREAMLIT APP INTERFACE

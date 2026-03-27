@@ -17,6 +17,8 @@ st.markdown("""
     .streamlit-expanderHeader { background-color: #002140 !important; border-radius: 5px; }
     .stButton>button { background-color: #1890ff; color: white; border-radius: 10px; width: 100%; border: none; font-weight: bold; height: 3em; }
     .stSlider label, .stTextInput label, .stDateInput label { color: #bae7ff !important; }
+    /* Footer Style */
+    .footer { position: fixed; left: 0; bottom: 10px; width: 100%; text-align: center; color: #668ba8; font-size: 12px; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -53,23 +55,17 @@ def get_weather_data(icao_code, report_type="taf"):
 
 def generate_briefing(weather_context, flight_plan_summary, pilot_name, greeting_pack):
     greet, opener = greeting_pack
-    # Instructions updated to be even more strict about the first line
     system_prompt = f"""
     You are an experienced British aviation assistant. Write a structured briefing for Pilot {pilot_name}.
     TONE: Start with: "{greet} {pilot_name}, {opener}"
-    
-    IMPORTANT: Line 1 of your response MUST be exactly one of: [STATUS:RED], [STATUS:AMBER], or [STATUS:GREEN].
-    Do NOT add numbers like "1." or any text before these brackets. 
-    
-    If winds, clouds, or visibility are predicted to violate the pilot's limits during the window, you MUST use [STATUS:RED].
-    
-    DATA: {weather_context}
-    PLAN: {flight_plan_summary}
+    IMPORTANT: Line 1 MUST be one of: [STATUS:RED], [STATUS:AMBER], or [STATUS:GREEN].
+    If winds, clouds, or visibility violate limits, use [STATUS:RED].
+    DATA: {weather_context} | PLAN: {flight_plan_summary}
     """
     response = client.chat.completions.create(
         model="gemini-2.5-flash", 
         messages=[{"role": "system", "content": "Direct aviation assistant."}, {"role": "user", "content": system_prompt}],
-        temperature=0.2 # Dropped even lower for absolute consistency
+        temperature=0.2
     )
     return response.choices[0].message.content
 
@@ -124,7 +120,7 @@ with st.expander("📝 Flight Parameters", expanded=True):
 # 7. LOGIC
 # ==========================================
 if st.button("Generate Briefing", type="primary"):
-    with st.spinner("Analyzing data..."):
+    with st.spinner("Analyzing..."):
         weather_report = ""
         for i, icao in enumerate(selected_airports):
             m_text, m_data = get_weather_data(icao, "metar")
@@ -140,29 +136,26 @@ if st.button("Generate Briefing", type="primary"):
         st.rerun()
 
 # ==========================================
-# 8. THE CORRECTED DISPLAY LOGIC
+# 8. RESULTS DISPLAY
 # ==========================================
 if st.session_state.last_briefing:
     st.divider()
     output = st.session_state.last_briefing
-    
-    # We grab the first line of the AI response to check for the status
     first_line = output.split('\n')[0].upper()
     
-    # NEW FLEXIBLE SEARCH: Looking for "RED", "AMBER", or "GREEN" anywhere in that first line
-    if "RED" in first_line:
-        st.error("### 🔴 NO-GO DECISION")
-    elif "AMBER" in first_line:
-        st.warning("### 🟡 MARGINAL - PROCEED WITH CAUTION")
-    elif "GREEN" in first_line:
-        st.success("### 🟢 GO-AHEAD")
-    else:
-        # Failsafe: If the AI goes off-script, we assume caution (Amber) rather than a false Green
-        st.warning("### 🟡 CAUTION: Status unclear, please read briefing carefully.")
+    if "RED" in first_line: st.error("### 🔴 NO-GO DECISION")
+    elif "AMBER" in first_line: st.warning("### 🟡 CAUTION")
+    elif "GREEN" in first_line: st.success("### 🟢 GO-AHEAD")
+    else: st.warning("### 🟡 CAUTION: Review Carefully")
 
-    # Remove the tag line completely from the display text
     clean_text = "\n".join(output.split('\n')[1:]).strip()
     st.markdown(clean_text)
     
     with st.expander("🔍 View Raw Weather Data"):
         st.code(st.session_state.last_weather_raw)
+
+# ==========================================
+# 9. FOOTER (YOUR SIGNATURE)
+# ==========================================
+st.markdown("<br><br><br>", unsafe_allow_html=True) # Adds some space
+st.caption("Built by Josh Horby")

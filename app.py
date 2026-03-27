@@ -66,35 +66,64 @@ def generate_briefing(weather_context, flight_plan_summary):
     )
     return response.choices[0].message.content
 
-
 # ==========================================
-# 4. STREAMLIT APP INTERFACE
+# 4. INTERACTIVE USER INTERFACE
 # ==========================================
 st.title("✈️ Morning, Tonye")
-st.write("Check your VFR minimums against the latest CheckWX data.")
+st.write("Set your parameters and generate your custom briefing.")
 
-# Interactive Flight Plan Box
 with st.expander("📝 Current Flight Parameters", expanded=True):
-    flight_plan = st.text_area(
-        "Edit your flight plan or limits here before generating:",
-        value="Route: Stansted (EGSS) to Shoreham (EGKA) via North Weald (EGSX) and Southend (EGMC).\nTime: 0915Z to 1300Z\nLimits: Max wind 15kt steady / 20kt gust. Min cloud 1500ft. Min Vis 8000m.",
-        height=100
-    )
+    # Route Input (Universal)
+    route_raw = st.text_input("Route (Enter ICAO codes separated by commas):", value="EGSS, EGSX, EGMC, EGKA")
+    # Clean up the input into a list
+    selected_airports = [icao.strip().upper() for icao in route_raw.split(",") if icao.strip()]
 
-# The Big Button
+    # Times
+    col1, col2 = st.columns(2)
+    with col1:
+        dep_time = st.time_input("Departure Time (Z)", datetime.time(9, 15))
+    with col2:
+        ret_time = st.time_input("Return Time (Z)", datetime.time(13, 0))
+
+    st.divider()
+    st.write("**Personal Minimums**")
+    
+    # Sliders for easy mobile use
+    c1, c2 = st.columns(2)
+    with c1:
+        max_wind = st.slider("Max Wind (kts)", 5, 30, 15)
+        min_cloud = st.slider("Min Cloud (ft)", 500, 5000, 1500, step=100)
+    with c2:
+        max_gust = st.slider("Max Gust (kts)", 5, 45, 20)
+        min_vis = st.slider("Min Vis (m)", 1000, 10000, 8000, step=500)
+
+    # Summarize selection for the AI
+    flight_summary = f"""
+    Route: {', '.join(selected_airports)}
+    Times: {dep_time.strftime('%H%MZ')} to {ret_time.strftime('%H%MZ')}
+    Limits: {max_wind}kt wind / {max_gust}kt gust. {min_cloud}ft cloud base. {min_vis}m visibility.
+    """
+
+# ==========================================
+# 5. EXECUTION
+# ==========================================
 if st.button("Generate Briefing", type="primary"):
-    with st.spinner("Fetching METARs & TAFs and analyzing..."):
-        
-        airports = ["EGSS", "EGSX", "EGMC", "EGKA"]
-        compiled_weather = ""
-        
-        for icao in airports:
-            metar = get_weather_data(icao, "metar")
-            taf = get_weather_data(icao, "taf")
-            compiled_weather += f"--- {icao} ---\nMETAR: {metar}\nTAF: {taf}\n\n"
-        
-        briefing = generate_briefing(compiled_weather, flight_plan)
-        
-        st.markdown("---")
-        st.markdown("### 📋 Pre-Flight Analysis")
-        st.markdown(briefing)
+    if not selected_airports:
+        st.warning("Please enter at least one ICAO code.")
+    else:
+        with st.spinner("Analyzing METARs and TAFs..."):
+            weather_report = ""
+            for icao in selected_airports:
+                m = get_weather_data(icao, "metar")
+                t = get_weather_data(icao, "taf")
+                weather_report += f"--- {icao} ---\nMETAR: {m}\nTAF: {t}\n\n"
+            
+            output = generate_briefing(weather_report, flight_summary)
+            
+            st.markdown("---")
+            st.markdown("### 📋 Pre-Flight Analysis")
+            st.markdown(output)
+            
+            # Bonus: Show the raw data at the bottom in case you want to see it
+            with st.expander("🔍 View Raw Weather Data"):
+                st.code(weather_report)

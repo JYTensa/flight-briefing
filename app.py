@@ -53,13 +53,12 @@ def get_weather_data(icao_code, report_type="taf"):
 
 def generate_briefing(weather_context, flight_plan_summary, pilot_name, greeting_pack):
     greet, opener = greeting_pack
-    # Changed format instructions to use a bracketed tag on its own line
     system_prompt = f"""
     You are an experienced British aviation assistant. Write a structured briefing for Pilot {pilot_name}.
     TONE: Start with: "{greet} {pilot_name}, {opener}"
     FORMAT: 
-    - Line 1 MUST be one of these tags: [STATUS:RED], [STATUS:AMBER], or [STATUS:GREEN]
-    - Then start your numbered briefing: 1. Go/No-Go Assessment. 2. Airport Breakdown. 3. Outlook.
+    - Line 1 MUST be one of: [STATUS:RED], [STATUS:AMBER], or [STATUS:GREEN]
+    - Then start your numbered briefing: 1. Go/No-Go. 2. Airport Breakdown. 3. Outlook.
     DATA: {weather_context} | PLAN: {flight_plan_summary}
     """
     response = client.chat.completions.create(
@@ -70,14 +69,19 @@ def generate_briefing(weather_context, flight_plan_summary, pilot_name, greeting
     return response.choices[0].message.content
 
 # ==========================================
-# 3. SETTINGS & SESSION STATE
+# 3. INITIALIZE MEMORY (SESSION STATE)
 # ==========================================
 if 'pilot_name' not in st.session_state: st.session_state.pilot_name = "Tonye"
 if 'auto_wind_spd' not in st.session_state: st.session_state.auto_wind_spd = 0
 if 'auto_wind_dir' not in st.session_state: st.session_state.auto_wind_dir = 0
+if 'last_briefing' not in st.session_state: st.session_state.last_briefing = None
+if 'last_weather_raw' not in st.session_state: st.session_state.last_weather_raw = ""
 
 greeting_word, ai_opener = get_dynamic_greeting()
 
+# ==========================================
+# 4. TOP BAR
+# ==========================================
 col_t, col_g = st.columns([0.85, 0.15])
 with col_t: st.title(f"✈️ {greeting_word}, {st.session_state.pilot_name}")
 with col_g:
@@ -85,10 +89,10 @@ with col_g:
         st.session_state.pilot_name = st.text_input("Name:", value=st.session_state.pilot_name)
 
 # ==========================================
-# 4. CROSSWIND CALCULATOR (Now with Session State)
+# 5. CROSSWIND CALCULATOR (Updated by Briefing)
 # ==========================================
 with st.expander("🌬️ Smart Crosswind Calculator"):
-    st.info("Input runway heading. Wind is automatically updated from your briefing below.")
+    st.caption("Values below are updated automatically when you generate a briefing.")
     c1, c2, c3 = st.columns(3)
     with c1: r_hdg = st.number_input("Runway Hdg", 0, 360, 250)
     with c2: w_dir = st.number_input("Wind Dir", 0, 360, st.session_state.auto_wind_dir)
@@ -98,7 +102,7 @@ with st.expander("🌬️ Smart Crosswind Calculator"):
     st.write(f"**Crosswind:** {xw} kt | **Headwind:** {hw} kt")
 
 # ==========================================
-# 5. FLIGHT PARAMETERS
+# 6. FLIGHT PARAMETERS
 # ==========================================
 with st.expander("📝 Flight Parameters", expanded=True):
     route_raw = st.text_input("Route (ICAOs):", value="EGSS, EGSX, EGMC, EGKA")
@@ -116,37 +120,46 @@ with st.expander("📝 Flight Parameters", expanded=True):
     flight_summary = f"Date: {raw_date} | Times: {dep_time}-{ret_time} | Limits: {max_wind}kt/{max_gust}kt"
 
 # ==========================================
-# 6. EXECUTION
+# 7. LOGIC & EXECUTION
 # ==========================================
 if st.button("Generate Briefing", type="primary"):
-    with st.spinner("Fetching data and calculating..."):
+    with st.spinner("Analyzing..."):
         weather_report = ""
-        first_icao_data = None
-        
         for i, icao in enumerate(selected_airports):
             m_text, m_data = get_weather_data(icao, "metar")
             t_text, _ = get_weather_data(icao, "taf")
             weather_report += f"--- {icao} ---\nMETAR: {m_text}\nTAF: {t_text}\n\n"
-            
-            # Smart logic: Grab wind from the first airport in your list for the calculator
             if i == 0 and m_data:
                 st.session_state.auto_wind_spd = m_data.get('wind', {}).get('speed_kts', 0)
                 st.session_state.auto_wind_dir = m_data.get('wind', {}).get('degrees', 0)
         
-        raw_output = generate_briefing(weather_report, flight_summary, st.session_state.pilot_name, (greeting_word, ai_opener))
+        briefing = generate_briefing(weather_report, flight_summary, st.session_state.pilot_name, (greeting_word, ai_opener))
         
-        st.divider()
-        
-        # IMPROVED COLOR LOGIC (Removes the blank '1.' issue)
-        if "[STATUS:RED]" in raw_output:
-            st.error("### 🔴 NO-GO DECISION")
-            display_text = raw_output.replace("[STATUS:RED]", "").strip()
-        elif "[STATUS:AMBER]" in raw_output:
-            st.warning("### 🟡 MARGINAL - CAUTION")
-            display_text = raw_output.replace("[STATUS:AMBER]", "").strip()
-        else:
-            st.success("### 🟢 GO-AHEAD")
-            display_text = raw_output.replace("[STATUS:GREEN]", "").strip()
+        # Save to memory
+        st.session_state.last_briefing = briefing
+        st.session_state.last_weather_raw = weather_report
+        st.rerun()
 
-        st.markdown(display_text)
-        st.rerun() # Reruns to update the calculator at the top with the new wind!
+# ==========================================
+# 8. DISPLAY THE RESULTS (Outside the button)
+# ==========================================
+if st.session_state.last_briefing:
+    st.divider()
+    output = st.session_state.last_briefing
+    
+    # Check status and show banner
+    if "[STATUS:RED]" in output:
+        st.error("### 🔴 NO-GO DECISION")
+        clean_text = output.replace("[STATUS:RED]", "").strip()
+    elif "[STATUS:AMBER]" in output:
+        st.warning("### 🟡 MARGINAL - CAUTION")
+        clean_text = output.replace("[STATUS:AMBER]", "").strip()
+    else:
+        st.success("### 🟢 GO-AHEAD")
+        clean_text = output.replace("[STATUS:GREEN]", "").strip()
+
+    st.markdown(clean_text)
+    
+    # Raw Data Expander
+    with st.expander("🔍 View Raw Weather Data"):
+        st.code(st.session_state.last_weather_raw)
